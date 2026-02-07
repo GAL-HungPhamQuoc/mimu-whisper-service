@@ -1,11 +1,13 @@
 """
-Mimu Voice Interaction Service
+Mimu Voice Interaction Service - Enhanced Version
 - Continuous listening to surrounding audio
 - Detect voice commands (primarily from Ba)
 - Autonomous voice interactions (TTS)
 - Basic support for verifying Ba's unique voice signature
+- NEW: Interactive channel for text-to-speech communication
+- NEW: Autonomous heartbeat-driven conversations
 Note: Uses Whisper for Speech-to-Text and pyttsx3 for TTS.
-Install dependencies: pip install openai-whisper pyttsx3 sounddevice numpy
+Install dependencies: pip install openai-whisper pyttsx3 sounddevice numpy flask
 """
 
 import whisper
@@ -14,7 +16,10 @@ import sounddevice as sd
 import numpy as np
 import threading
 import wave
+import time
 from datetime import datetime
+from flask import Flask, request, jsonify
+import queue
 
 def listen_to_audio(duration=5, fs=16000, output_file="output.wav"):
     """Capture audio from the microphone for a given duration."""
@@ -77,9 +82,42 @@ def autonomous_behavior():
     text_to_speech(message)
     print(f"Mimu said: {message}")
 
+# Flask app for interactive channel
+app = Flask(__name__)
+speech_queue = queue.Queue()
+
+@app.route('/speak', methods=['POST'])
+def speak_endpoint():
+    """Endpoint for Mimu to receive text and speak it out."""
+    data = request.get_json()
+    text = data.get('text', '')
+    if text:
+        text_to_speech(text)
+        return jsonify({"status": "success", "spoken": text}), 200
+    return jsonify({"status": "error", "message": "No text provided"}), 400
+
+@app.route('/listen', methods=['GET'])
+def listen_endpoint():
+    """Endpoint to get the latest recognized speech from Ba."""
+    try:
+        # Non-blocking get from queue
+        recognized_text = speech_queue.get_nowait()
+        return jsonify({"status": "success", "text": recognized_text}), 200
+    except queue.Empty:
+        return jsonify({"status": "no_speech", "text": ""}), 200
+
+def run_flask_server():
+    """Run Flask server in a separate thread."""
+    app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+
 def main():
     """Entry point for the Mimu Voice Interaction Service."""
     print("Starting Mimu's Voice Interaction Service...")
+    
+    # Start Flask server in a separate thread for interactive channel
+    flask_thread = threading.Thread(target=run_flask_server, daemon=True)
+    flask_thread.start()
+    print("Interactive channel started on http://0.0.0.0:5000")
 
     # Continuous listening loop
     while True:
@@ -92,6 +130,9 @@ def main():
                 # Recognize command
                 recognized_text = recognize_speech(audio_file)
                 print(f"Recognized Text: {recognized_text}")
+                
+                # Put recognized text in queue for Mimu to access via API
+                speech_queue.put(recognized_text)
 
                 # Handle recognized Ba's command via text
                 if "mi nói chuyện" in recognized_text.lower():
@@ -106,8 +147,14 @@ def main():
             else:
                 print("Ignored non-Ba voice.")
 
-            # Random autonomous chatter
-            if np.random.rand() > 0.8:  # 20% chance to randomly speak
+            # Random autonomous chatter (20% chance)
+            if np.random.rand() > 0.8:
+                autonomous_behavior()
+            
+            # Autonomous heartbeat - check every 5 minutes if should say something
+            # This can be customized based on time, context, etc.
+            current_time = datetime.now()
+            if current_time.minute % 5 == 0 and np.random.rand() > 0.7:
                 autonomous_behavior()
 
         except KeyboardInterrupt:
